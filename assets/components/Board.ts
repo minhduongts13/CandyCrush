@@ -2,19 +2,23 @@
 import { _decorator, Component, instantiate, log, Prefab, Tween, tween, Vec3, Node, Input } from 'cc'
 const { ccclass, property } = _decorator
 import GameConfig from '../constants/GameConfig'
-import { Tile } from './Tile'
+import { Tile } from './Tile/Tile'
 import { TilePool } from './TilePool'
 import { GAMEKEY } from '../constants/GameKey'
 import { Cell } from './Cell'
-import { Match, Movement } from '../constants/global'
+import { IBoard, Match, Movement } from '../constants/global'
+import { Utils } from './Utils'
+import AnimationManager from './AnimationManager'
 @ccclass('Board')
-export default class Board extends Component {
+export default class Board extends Component implements IBoard{
     private canMove = false
 
     private tileGrid: (Tile | undefined)[][] = []
 
     private firstSelectedTile: Tile | undefined = undefined
     private secondSelectedTile: Tile | undefined = undefined
+
+    private animationManager!: AnimationManager;
 
     @property(Prefab)
     private tilePoolPrefab: Prefab | null = null
@@ -32,8 +36,6 @@ export default class Board extends Component {
     private tileLayer: Node | null = null;
     @property(Node)
     private effectLayer: Node | null = null
-    @property(Prefab)
-    private fireworkPrefab: Prefab | null = null
 
 
     __preload(): void {
@@ -42,7 +44,6 @@ export default class Board extends Component {
         if (this.cellPrefab === null) throw new Error('Cell prefab is not set')
         if (this.cellLayer === null) throw new Error('CellLayer is not set')
         if (this.tileLayer === null) throw new Error('TileLayer is not set')
-        if (this.fireworkPrefab === null) throw new Error('Firework prefab is not set')
         if (this.effectLayer === null) throw new Error('EffectLayer is not set')
     }
 
@@ -114,7 +115,7 @@ export default class Board extends Component {
         const cell = node.getComponent(Cell) as Cell | null
         if (cell === null) throw new Error('Failed to get cell component')
         cell.setCellType((x + y)%2 + 1)
-        const { x: xPos, y: yPos } = this.getTilePosition({ x, y })
+        const { x: xPos, y: yPos } = Utils.getTilePosition({ x, y })
         node.setPosition(xPos, yPos)
         this.cellLayer!.addChild(cell.node);
         return cell;
@@ -136,8 +137,8 @@ export default class Board extends Component {
             } else {
                 this.secondSelectedTile = tile
 
-                const firstSelectedTileCoords = this.getTileCoords(this.firstSelectedTile)
-                const secondSelectedTileCoords = this.getTileCoords(this.secondSelectedTile)
+                const firstSelectedTileCoords = Utils.getTileCoords(this.tileGrid, this.firstSelectedTile)
+                const secondSelectedTileCoords = Utils.getTileCoords(this.tileGrid, this.secondSelectedTile)
 
                 const dx = Math.abs(firstSelectedTileCoords.x - secondSelectedTileCoords.x)
                 const dy = Math.abs(firstSelectedTileCoords.y - secondSelectedTileCoords.y)
@@ -156,38 +157,10 @@ export default class Board extends Component {
         }
     }
 
-    private getTilePosition(coords: { x: number; y: number }): { x: number; y: number } {
-        return {
-            x:
-                (-GameConfig.GridWidth * GameConfig.TileWidth) / 2 +
-                GameConfig.TileWidth / 2 +
-                coords.x * GameConfig.TileWidth,
-            y:
-                // Invert y coordinate since game world coordinates are inverted (positive y is up)
-                -(
-                    (-GameConfig.GridHeight * GameConfig.TileHeight) / 2 +
-                    GameConfig.TileHeight / 2 +
-                    coords.y * GameConfig.TileHeight
-                ),
-        }
-    }
-
-    private getTileCoords(tile: Tile): { x: number; y: number } {
-        for (let y = 0; y < this.tileGrid.length; y++) {
-            for (let x = 0; x < this.tileGrid[y].length; x++) {
-                if (this.tileGrid[y][x] === tile) {
-                    return { x, y }
-                }
-            }
-        }
-
-        throw new Error('Tile not found')
-    }
-
     private swapTiles(): void {
         if (this.firstSelectedTile && this.secondSelectedTile) {
-            const firstSelectedTileCoords = this.getTileCoords(this.firstSelectedTile)
-            const secondSelectedTileCoords = this.getTileCoords(this.secondSelectedTile)
+            const firstSelectedTileCoords = Utils.getTileCoords(this.tileGrid, this.firstSelectedTile)
+            const secondSelectedTileCoords = Utils.getTileCoords(this.tileGrid, this.secondSelectedTile)
 
             
 
@@ -241,8 +214,8 @@ export default class Board extends Component {
 
     private swapTilesBack(): void {
     if (this.firstSelectedTile && this.secondSelectedTile) {
-        const firstSelectedTileCoords = this.getTileCoords(this.firstSelectedTile)
-        const secondSelectedTileCoords = this.getTileCoords(this.secondSelectedTile)
+        const firstSelectedTileCoords = Utils.getTileCoords(this.tileGrid, this.firstSelectedTile)
+        const secondSelectedTileCoords = Utils.getTileCoords(this.tileGrid, this.secondSelectedTile)
 
         // Swap back in the grid
         this.tileGrid[firstSelectedTileCoords.y][firstSelectedTileCoords.x] = this.secondSelectedTile
@@ -286,12 +259,12 @@ export default class Board extends Component {
     private checkMatches(): void {
         const matches = this.getMatches(this.tileGrid)
         if (matches.length > 0) {
-            this.matchWorking(matches);
-            // this.removeTileGroup(matches)
-            this.tileUp()
-            this.animateDropAndFill().then(() =>{
-                this.checkMatches()
-            })
+            this.matchWorking(matches).then(() => {
+                this.tileUp()
+                this.animateDropAndFill().then(() => {
+                    this.checkMatches()
+                })
+            });
         } else {
             this.swapTilesBack()
             this.tileUp()
@@ -328,9 +301,8 @@ export default class Board extends Component {
                 movements.push({ tile, from: { x, y: spawnY }, to: { x, y: destY } });
             }
         }
-        return this.runAnimations(movements);
+        return this.animationManager.runAnimations(movements);
     }
-
 
     private tileUp(): void {
         // log(this.firstSelectedTile)
@@ -344,110 +316,68 @@ export default class Board extends Component {
         this.secondSelectedTile = undefined
     }
 
-    private removeTileGroup(match: Tile[]): void {
-        // const toRemove = new Set<Tile>()
-        // for (const group of matches) {
-        //     for (const tile of group) {
-        //         toRemove.add(tile)
-        //     }
-        // }
-        for (const tile of match) {
-            try {
-                const { x, y } = this.getTileCoords(tile)
-                const pos = this.getTilePosition({ x, y })
-                const fxNode = instantiate(this.fireworkPrefab!) as Node
-                fxNode!.setPosition(pos.x, pos.y, 0)
-                this.effectLayer!.addChild(fxNode)
-                this.tilePool.release(tile)
-                this.tileGrid[y][x] = undefined
-            } catch {
+    private async removeSpecialTile(tile: Tile): Promise<void> {
+        const type = tile.getSpecialType();
+        const specialType = type.split('_')[1];
+        const explodeAnimation = new Promise<void>(res => {
+            tween(tile.node)
+            .to(0.15, { scale: new Vec3(GAMEKEY.TILE.ORIGINAL.SCALE.x + 0.2, GAMEKEY.TILE.ORIGINAL.SCALE.y + 0.2, 1) }, { easing: 'backOut' })
+            .to(0.10, { scale: new Vec3(GAMEKEY.TILE.ORIGINAL.SCALE.x, GAMEKEY.TILE.ORIGINAL.SCALE.y, 1) }, { easing: 'quadIn' })
+            .call(() => {
+                res();
+            })
+            .start();
+        });
+        switch(specialType){
+            case GameConfig.SpecialEffects.HORIZONTAL:
+                explodeAnimation
+                return this.animationManager.spawnFireBall(true, tile);
+            case GameConfig.SpecialEffects.VERTICAL:
+                explodeAnimation
+                return this.animationManager.spawnFireBall(false, tile);
+            case GameConfig.SpecialEffects.BOMB:
+                explodeAnimation
 
-            }            
-        }
+                return this.animationManager.bombExplode(tile);
+            default:
+                if (type == GameConfig.SpecialEffects.RAINBOW){
+                    return Promise.resolve();
+                }
+            }
+        return Promise.resolve();
     }
 
     private getMatches(tileGrid: (Tile | undefined)[][]): Match[] {
-        // let matches: Tile[][] = []
-        // let groups: Tile[] = []
-
-        // for (let y = 0; y < tileGrid.length; y++) {
-        //     let tempArray = tileGrid[y]
-        //     groups = []
-        //     for (let x = 0; x < tempArray.length; x++) {
-        //         if (x < tempArray.length - 2) {
-        //             if (tileGrid[y][x] && tileGrid[y][x + 1] && tileGrid[y][x + 2]) {
-        //                 if (
-        //                     tileGrid[y][x]!.getTileType() === tileGrid[y][x + 1]!.getTileType() &&
-        //                     tileGrid[y][x + 1]!.getTileType() === tileGrid[y][x + 2]!.getTileType()
-        //                 ) {
-        //                     if (groups.length > 0) {
-        //                         if (groups.indexOf(tileGrid[y][x]!) === -1) {
-        //                             matches.push(groups)
-        //                             groups = []
-        //                         }
-        //                     }
-
-        //                     if (groups.indexOf(tileGrid[y][x]!) === -1) {
-        //                         groups.push(tileGrid[y][x]!)
-        //                     }
-
-        //                     if (groups.indexOf(tileGrid[y][x + 1]!) === -1) {
-        //                         groups.push(tileGrid[y][x + 1]!)
-        //                     }
-
-        //                     if (groups.indexOf(tileGrid[y][x + 2]!) === -1) {
-        //                         groups.push(tileGrid[y][x + 2]!)
-        //                     }
-        //                 }
-        //             }
-        //         }
-        //     }
-
-        //     if (groups.length > 0) {
-        //         matches.push(groups)
-        //     }
-        // }
-
-        // for (let j = 0; j < tileGrid.length; j++) {
-        //     const tempArr = tileGrid[j]
-        //     groups = []
-        //     for (let i = 0; i < tempArr.length; i++) {
-        //         if (i < tempArr.length - 2)
-        //             if (tileGrid[i][j] && tileGrid[i + 1][j] && tileGrid[i + 2][j]) {
-        //                 if (
-        //                     tileGrid[i][j]!.getTileType() === tileGrid[i + 1][j]!.getTileType() &&
-        //                     tileGrid[i + 1][j]!.getTileType() === tileGrid[i + 2][j]!.getTileType()
-        //                 ) {
-        //                     if (groups.length > 0) {
-        //                         if (groups.indexOf(tileGrid[i][j]!) === -1) {
-        //                             matches.push(groups)
-        //                             groups = []
-        //                         }
-        //                     }
-
-        //                     if (groups.indexOf(tileGrid[i][j]!) === -1) {
-        //                         groups.push(tileGrid[i][j]!)
-        //                     }
-        //                     if (groups.indexOf(tileGrid[i + 1][j]!) === -1) {
-        //                         groups.push(tileGrid[i + 1][j]!)
-        //                     }
-        //                     if (groups.indexOf(tileGrid[i + 2][j]!) === -1) {
-        //                         groups.push(tileGrid[i + 2][j]!)
-        //                     }
-        //                 }
-        //             }
-        //     }
-        //     if (groups.length > 0) matches.push(groups)
-        // }
-
-        // return matches
+        let visited : boolean[][] = [];
+        for (let y = 0; y < GameConfig.GridHeight; y++){
+            let row = [];
+            for (let x = 0; x < GameConfig.GridWidth; x++){
+                row.push(false);
+            }
+            visited.push(row);
+        }
         let matches : Match[] = []
         for (let y = 0; y < GameConfig.GridHeight; y++){
             for (let x = 0; x < GameConfig.GridWidth; x++){
-                const curTile = this.tileGrid[y][x];
-                const horizontal = this.checkHorizontalMatch(curTile!);
-                const vertical = this.checkVerticalMatch(curTile!);
-                if (horizontal.length > 0 || vertical.length > 0)
+                if (visited[y][x]) continue;
+                const curTile = this.tileGrid[y][x]!;
+                if (!curTile) continue; 
+                const match = this.getMatch(curTile);
+                const horizontal = match.horizontal;
+                const vertical = match.vertical;
+                if (horizontal.length >= 3){
+                    horizontal.forEach((tile: Tile) => {
+                        const {x, y} = Utils.getTileCoords(this.tileGrid, tile);
+                        visited[y][x] = true;
+                    })
+                }
+                if (vertical.length >= 3){
+                    vertical.forEach((tile: Tile) => {
+                        const {x, y} = Utils.getTileCoords(this.tileGrid, tile);
+                        visited[y][x] = true;
+                    })
+                }
+                if (horizontal.length >= 3 || vertical.length >= 3)
                     matches.push({horizontal, vertical});
             }
         }
@@ -455,103 +385,224 @@ export default class Board extends Component {
 
     }
 
-    private checkHorizontalMatch(tile: Tile): Tile[] {
-        const {x, y} = this.getTileCoords(tile);
-        const match : Tile[] = [tile]; 
-        let i = x - 1;
-        while (i >= 0 && this.tileGrid[y][i]?.getTileType() == tile.getTileType()){
-            match.push(this.tileGrid[y][i]!);
-            i--;
+    private getMatch(tile: Tile): Match {
+        let hoz = this.checkHorizontalMatch(tile);
+        let ver = this.checkVerticalMatch(tile);
+        for (let i = 1; i < hoz.length; i++){
+            const nextHoz = this.checkHorizontalMatch(hoz[i]);
+            const nextVer = this.checkVerticalMatch(hoz[i]);
+            if (nextHoz.length + nextVer.length - 1 > hoz.length + ver.length - 1){
+                hoz = nextHoz;
+                ver = nextVer;
+            }
         }
-        i = x + 1;
-        while (i < GameConfig.GridWidth && this.tileGrid[y][i]?.getTileType() == tile.getTileType()){
-            match.push(this.tileGrid[y][i]!);
-            i++;
+        for (let i = 1; i < ver.length; i++){
+            const nextHoz = this.checkHorizontalMatch(ver[i]);
+            const nextVer = this.checkVerticalMatch(ver[i]);
+            if (nextHoz.length + nextVer.length - 1 > hoz.length + ver.length - 1){
+                hoz = nextHoz;
+                ver = nextVer;
+            }
         }
-        return match;
-    }
-    private checkVerticalMatch(tile: Tile): Tile[] {
-        const {x, y} = this.getTileCoords(tile);
-        const match : Tile[] = [tile]; 
-        let i = y - 1;
-        while (i >= 0 && this.tileGrid[i][x]?.getTileType() == tile.getTileType()){
-            match.push(this.tileGrid[i][x]!);
-            i--;
-        }
-        i = x + 1;
-        while (i < GameConfig.GridHeight && this.tileGrid[i][x]?.getTileType() == tile.getTileType()){
-            match.push(this.tileGrid[i][x]!);
-            i++;
-        }
-        return match;
+
+        return {horizontal: hoz, vertical: ver};
     }
 
-    private matchWorking(matches: Match[]): void {
+    private checkHorizontalMatch(tile: Tile): Tile[] {
+        let v = 0;
+        let h = 0;
+        const {x, y} = Utils.getTileCoords(this.tileGrid, tile);
+        const match : Tile[] = [tile]; 
+        let i = x - 1;
+        while (i >= 0 && this.tileGrid[y][i] && this.tileGrid[y][i]?.getTileType() == tile.getTileType()){
+            match.push(this.tileGrid[y][i]!);
+            i--;
+        }
+        i = x + 1;
+        while (i < GameConfig.GridWidth && this.tileGrid[y][i] && this.tileGrid[y][i]?.getTileType() == tile.getTileType()){
+            match.push(this.tileGrid[y][i]!);
+            i++;
+        }
+        return match.length >= 3 ? match : [];
+    }
+
+    private checkVerticalMatch(tile: Tile): Tile[] {
+        const {x, y} = Utils.getTileCoords(this.tileGrid, tile);
+        const match : Tile[] = [tile]; 
+        let i = y - 1;
+        while (i >= 0 && this.tileGrid[i][x] && this.tileGrid[i][x]?.getTileType() == tile.getTileType()){
+            match.push(this.tileGrid[i][x]!);
+            i--;
+        }
+        i = y + 1;
+        while (i < GameConfig.GridHeight &&  this.tileGrid[i][x] && this.tileGrid[i][x]?.getTileType() == tile.getTileType()){
+            match.push(this.tileGrid[i][x]!);
+            i++;
+        }
+        return match.length >= 3 ? match : [];
+    }
+
+    private async matchWorking(matches: Match[]): Promise<void> {
         // Có chuỗi 5 -> Gom lại thành Trái cầu vồng
         // có cả hàng lẫn cột -> Gom lại thành Bom 3x3
         // Chuỗi 4 -> Gom lại thành Bom dọc/ngang
         // chuỗi 3 nổ bình thường
+        const removalPromise: Promise<void>[] = [];
         for (let match of matches){
             const horizontal = match.horizontal;
             const vertical = match.vertical;
             if (horizontal.length == 5 || vertical.length == 5){
-                if (horizontal.length >= 3 && vertical.length >= 3)
-                    vertical.shift();
-                this.removeTileGroup(horizontal);
-                this.removeTileGroup(vertical);
+                if (horizontal.length >= 3 && vertical.length >= 3) {
+                    vertical.shift(); // Tile gốc trùng
+                    removalPromise.push(this.match5(horizontal.concat(vertical)));
+                }
+                else if (horizontal.length == 5){
+                    removalPromise.push(this.match5(horizontal));
+                }
+                else {
+                    removalPromise.push(this.match5(vertical));
+                }
             }
             else if (horizontal.length >= 3 && vertical.length >= 3){
-                    vertical.shift(); // Tile gốc trùng
-                    this.removeTileGroup(horizontal);
-                    this.removeTileGroup(vertical);
+                vertical.shift(); // Tile gốc trùng
+                removalPromise.push(this.match2Row(horizontal.concat(vertical)));
             }
             else if (horizontal.length == 4 || vertical.length == 4){
                 if (horizontal.length == 4){
-                    this.removeTileGroup(horizontal);
+                    removalPromise.push(this.match4(horizontal));
                 }
                 else {
-                    this.removeTileGroup(vertical);
+                    removalPromise.push(this.match4(vertical));
                 }
             }
             else {
                 if (horizontal.length == 3){
-                    this.removeTileGroup(horizontal);
+                    removalPromise.push(this.removeTileGroup(horizontal));
                 }
                 else if (vertical.length == 3){
-                    this.removeTileGroup(vertical);
+                    removalPromise.push(this.removeTileGroup(vertical));
                 }
             }
         }
+        await Promise.all(removalPromise);
     }
 
-    private runAnimations(movements: Movement[]): Promise<void> {
-        return new Promise(res => {
-            let remaining = movements.length;
-            if (remaining === 0) return res();
-            for (const mv of movements) {
-                const { tile, from, to } = mv;
-                const fromPos = this.getTilePosition(from);
-                const toPos   = this.getTilePosition(to);
-                // tile.node.setPosition(fromPos.x, fromPos.y, 0);
-                const deltaY = Math.abs(to.y - from.y);
-                const duration = 0.15 * deltaY;  
+    private match5(match: Tile[]): Promise<void> {
+        const centerTile = match[0]
+        const centerPos  = centerTile.node.getWorldPosition()
+        
+        const tweens = match.slice(1).map(tile => {
+            this.animationManager.spawnFireworkEffect(tile)
+            const { x: gx, y: gy } = Utils.getTileCoords(this.tileGrid, tile);
+            return new Promise<void>(res => {
                 tween(tile.node)
-                    .to(duration, { position: new Vec3(toPos.x, toPos.y, 0) })
+                    .to(0.3, { worldPosition: new Vec3(centerPos.x, centerPos.y, centerPos.z) })
                     .call(() => {
-                        tween(tile.node)
-                            .to(0.08, { scale: new Vec3(GAMEKEY.TILE.ORIGINAL.SCALE.x + 0.2, GAMEKEY.TILE.ORIGINAL.SCALE.y - 0.2, GAMEKEY.TILE.ORIGINAL.SCALE.z) })
-                            .to(0.08, { scale: new Vec3(GAMEKEY.TILE.ORIGINAL.SCALE.x, GAMEKEY.TILE.ORIGINAL.SCALE.y, GAMEKEY.TILE.ORIGINAL.SCALE.z) })
-                            .call(() => {
-                                if (--remaining === 0) {
-                                    res();
-                                }
-                            })
-                            .start();
+                        this.tilePool.release(tile);
+                        this.tileGrid[gy][gx] = undefined;
+                        res()
                     })
-                    .start();
+                    .start()
+            });
+        })
+
+        return Promise.all(tweens).then(() => {
+            centerTile.setSpecialType(GameConfig.SpecialTypes.RAINBOW)
+        })
+    }
+
+    private match2Row(match: Tile[]): Promise<void> {
+        const centerTile = match[0]
+        const centerPos  = centerTile.node.getWorldPosition()
+
+        const tweens = match.slice(1).map(tile => {
+            this.animationManager.spawnFireworkEffect(tile);
+            const { x: gx, y: gy } = Utils.getTileCoords(this.tileGrid, tile);
+            return new Promise<void>(resolve => {
+                tween(tile.node)
+                    .to(0.2, { worldPosition: centerPos })
+                    .call(() => {
+                        this.tilePool.release(tile)
+                        this.tileGrid[gy][gx] = undefined;
+                        resolve()
+                    })
+                    .start()
+            });
+        })
+
+        return Promise.all(tweens).then(() => {
+            let newType = '';
+            switch (centerTile.getTileType()){
+                case GameConfig.TYPES.RED:
+                    newType = GameConfig.SpecialTypes.RED.BOMB
+                    break;
+                case GameConfig.TYPES.BLUE:
+                    newType = GameConfig.SpecialTypes.BLUE.BOMB
+                    break;
+                case GameConfig.TYPES.ORANGE:
+                    newType = GameConfig.SpecialTypes.ORANGE.BOMB
+                    break;
+                case GameConfig.TYPES.GREEN:
+                    newType = GameConfig.SpecialTypes.GREEN.BOMB
+                    break;
+                case GameConfig.TYPES.PURPLE:
+                    newType = GameConfig.SpecialTypes.PURPLE.BOMB
+                    break;
+                case GameConfig.TYPES.YELLOW:
+                    newType = GameConfig.SpecialTypes.YELLOW.BOMB
+                    break;
             }
+            centerTile.setSpecialType(newType)
         });
     }
+
+    private match4(match: Tile[]): Promise<void> {
+        const centerTile = match[0]
+        const isHorizontal = match.every(t => Utils.getTileCoords(this.tileGrid, t).y === Utils.getTileCoords(this.tileGrid, centerTile).y)
+        const centerPos  = centerTile.node.getWorldPosition()
+
+        const removals = match.slice(1).map(tile => {
+            this.animationManager.spawnFireworkEffect(tile);
+            const { x: gx, y: gy } = Utils.getTileCoords(this.tileGrid, tile);
+            return new Promise<void>(resolve => {
+                tween(tile.node)
+                    .to(0.2, { worldPosition: centerPos })
+                    .call(() => {
+                        this.tilePool.release(tile)
+                        this.tileGrid[gy][gx] = undefined;
+                        resolve()
+                    })
+                    .start()
+            });
+        });
+
+        return Promise.all(removals).then(() => {
+            let newType = '';
+            switch (centerTile.getTileType()){
+                case GameConfig.TYPES.RED:
+                    newType = isHorizontal ? GameConfig.SpecialTypes.RED.HORIZONTAL : GameConfig.SpecialTypes.RED.VERTICAL
+                    break;
+                case GameConfig.TYPES.BLUE:
+                    newType = isHorizontal ? GameConfig.SpecialTypes.BLUE.HORIZONTAL : GameConfig.SpecialTypes.BLUE.VERTICAL
+                    break;
+                case GameConfig.TYPES.ORANGE:
+                    newType = isHorizontal ? GameConfig.SpecialTypes.ORANGE.HORIZONTAL : GameConfig.SpecialTypes.ORANGE.VERTICAL
+                    break;
+                case GameConfig.TYPES.GREEN:
+                    newType = isHorizontal ? GameConfig.SpecialTypes.GREEN.HORIZONTAL : GameConfig.SpecialTypes.GREEN.VERTICAL
+                    break;
+                case GameConfig.TYPES.PURPLE:
+                    newType = isHorizontal ? GameConfig.SpecialTypes.PURPLE.HORIZONTAL : GameConfig.SpecialTypes.PURPLE.VERTICAL
+                    break;
+                case GameConfig.TYPES.YELLOW:
+                    newType = isHorizontal ? GameConfig.SpecialTypes.YELLOW.HORIZONTAL : GameConfig.SpecialTypes.YELLOW.VERTICAL
+                    break;
+            }
+            centerTile.setSpecialType(newType)
+        })
+    }
+
+    
 
     private findHintPair(): [Tile, Tile] | null {
         const dirs = [{x:1,y:0}, {x:0,y:1}, {x:-1,y:0}, {x:0,y:-1}];
@@ -599,5 +650,31 @@ export default class Board extends Component {
             .union()
             .repeat(2)
             .start();
+    }
+
+    public getTileGrid(): (Tile | undefined)[][]{
+        return this.tileGrid;
+    }
+
+    public async removeTileGroup(match: Tile[]): Promise<void> {
+        for (const tile of match) {
+            try {
+                const { x, y } = Utils.getTileCoords(this.tileGrid, tile)
+                this.animationManager.spawnFireworkEffect(tile)
+                await this.removeSpecialTile(tile);
+                this.tilePool.release(tile)
+                this.tileGrid[y][x] = undefined
+            } catch {
+
+            }            
+        }
+    }
+
+    public getEffectLayer(): Node | null {
+        return this.effectLayer;
+    }
+
+    public setAnimationManager(animmanager: AnimationManager){
+        this.animationManager = animmanager;
     }
 }

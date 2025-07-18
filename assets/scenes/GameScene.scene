@@ -439,6 +439,10 @@
       "__uuid__": "f0fe6783-e353-470c-aa3e-b148380d6da3",
       "__expectedType__": "cc.Prefab"
     },
+    "animationManagerPrefab": {
+      "__uuid__": "8cb396db-5bba-4e53-bea6-8b1145e1f9d1",
+      "__expectedType__": "cc.Prefab"
+    },
     "_id": "62yKoROMlJI5fZ46/mTCWu"
   },
   {

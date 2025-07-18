@@ -369,6 +369,10 @@
       "__uuid__": "42f45f0f-0685-48cf-83ad-bd1f6f30b5e1",
       "__expectedType__": "cc.Prefab"
     },
+    "fireBallPrefab": {
+      "__uuid__": "44af2f32-99e7-41f7-8c82-73ba5d9c78f9",
+      "__expectedType__": "cc.Prefab"
+    },
     "_id": ""
   },
   {

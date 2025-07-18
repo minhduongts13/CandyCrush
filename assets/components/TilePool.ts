@@ -2,7 +2,7 @@
 import { _decorator, Component, instantiate, Prefab, Tween, Vec3, type Node } from 'cc'
 const { ccclass, property } = _decorator
 import GameConfig from '../constants/GameConfig'
-import { Tile } from './Tile'
+import { Tile } from './Tile/Tile'
 import { GAMEKEY } from '../constants/GameKey';
 import Board from './Board';
 @ccclass('TilePool')
@@ -48,7 +48,7 @@ export class TilePool extends Component {
 
     private creatileTile(x: number, y: number): Tile {
         const randomTileType: string =
-            GameConfig.CandyTypes[Math.floor(Math.random() * GameConfig.CandyTypes.length)]
+            GameConfig.CandyTypes[Math.floor(Math.random() * (GameConfig.CandyTypes.length))]
         const node = instantiate(this.tilePrefab) as Node | null
         if (node === null) throw new Error('Failed to instantiate tile prefab')
         const tile = node.getComponent(Tile) as Tile | null
